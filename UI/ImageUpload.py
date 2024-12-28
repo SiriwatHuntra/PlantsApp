@@ -1,52 +1,65 @@
 import gradio as gr
-import cv2
-import numpy as np
 from PIL import Image
+from rembg import remove
+import numpy as np
+import os
+import cv2
+import io
 
-def process_image_with_slider(image, x1, y1, x2, y2):
-    # Resize image to 512x512
-    image_np = cv2.resize(np.array(image), (512, 512), interpolation=cv2.INTER_LINEAR)
+def process_image(file):
 
-    # Ensure coordinates are valid and within bounds
-    x1, x2 = max(0, x1), min(511, x2)
-    y1, y2 = max(0, y1), min(511, y2)
+    if file is None:
+        return "No file uploaded. Please upload an image.", None
 
-    # Create mask and apply GrabCut algorithm
-    mask = np.zeros(image_np.shape[:2], np.uint8)
-    bgd_model = np.zeros((1, 65), np.float64)
-    fgd_model = np.zeros((1, 65), np.float64)
-    rect = (x1, y1, x2 - x1, y2 - y1)
+    # Extract file extension and validate
+    file_extension = os.path.splitext(file.name)[1].lower()
+    if file_extension not in ['.jpg', '.png']:
+        return "Invalid file format. Please upload a JPG or PNG image.", None
 
-    cv2.grabCut(image_np, mask, rect, bgd_model, fgd_model, 5, cv2.GC_INIT_WITH_RECT)
-    mask2 = np.where((mask == 2) | (mask == 0), 0, 1).astype("uint8")
-    result = image_np * mask2[:, :, np.newaxis]
+    try:
+        # Open and validate the image using Pillow
+        img = Image.open(file.name)
+        if img.format not in ['JPEG', 'PNG']:
+            return "Invalid file format. Please upload a valid JPG or PNG image.", None
 
-    return Image.fromarray(result)
+        # Resize the image to 512x512
+        img = img.resize((512, 512))
 
-# Create the Gradio interface
-with gr.Blocks() as demo:
-    gr.Markdown("""
-    # Image Background Remover with Sliders
-    Upload an image and use the sliders to adjust the bounding box for background removal.
-    """)
+        # Perform background removal
+        img_byte_array = io.BytesIO()
+        img.save(img_byte_array, format='PNG')  # Ensure compatibility before background removal
+        img_byte_array.seek(0)
+
+        output_image = remove(img_byte_array.getvalue())
+
+        # Convert the output back to a PIL image
+        output_image_io = io.BytesIO(output_image)
+        result_img = Image.open(output_image_io).convert('RGB')  # Ensure final image is RGB
+
+        # Save the result
+        output_path = "output.jpg"
+        result_img.save(output_path, "JPEG")
+
+        return "Background removed successfully!", output_path
+
+    except Exception as e:
+        return f"Error processing image: {e}", None
+
+with gr.Blocks() as app:
+    gr.Markdown("## Image Upload and Background Removal")
 
     with gr.Row():
-        input_image = gr.Image(label="Upload Image", type="pil")
-
         with gr.Column():
-            x1 = gr.Slider(0, 511, step=1, label="x1", value=50)
-            y1 = gr.Slider(0, 511, step=1, label="y1", value=50)
-            x2 = gr.Slider(0, 511, step=1, label="x2", value=400)
-            y2 = gr.Slider(0, 511, step=1, label="y2", value=400)
+            gr.Markdown("### Input")
+            file_input = gr.File(label="Upload Image", file_types=["image"], type="filepath")
+            submit_button = gr.Button("Cut Background")
+            status_output = gr.Textbox(label="Status")
+        
+        with gr.Column():
+            gr.Markdown("### Output")
+            image_output = gr.Image(label="Processed Image", type="filepath")
 
-    output_image = gr.Image(label="Processed Image")
-    process_button = gr.Button("Process")
+    submit_button.click(fn=process_image, inputs=file_input, outputs=[status_output, image_output])
 
-    process_button.click(
-        process_image_with_slider, 
-        inputs=[input_image, x1, y1, x2, y2], 
-        outputs=output_image
-    )
-
-# Launch the Gradio app
-demo.launch(debug=True)
+if __name__ == "__main__":
+    app.launch(debug=True)
